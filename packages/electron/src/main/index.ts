@@ -2204,6 +2204,7 @@ app.whenReady().then(async () => {
       return {
         defaultModel: getSettingsService().get('ai.gemini.mediumModel'),
         savedModelIds,
+        thinkingLevel: getSettingsService().get('ai.gemini.thinkingLevel'),
         overrideIdeVersion: typeof settings.overrideIdeVersion === 'string'
           ? settings.overrideIdeVersion
           : undefined,

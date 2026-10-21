@@ -25,8 +25,26 @@ import { AlphaBadge } from '../common/AlphaBadge';
 import { HelpTooltip } from '../../help';
 import { isDirectChatProvider, isProviderVisible } from '../../utils/chatProviderVisibility';
 import { useMenuTypeahead } from '../../hooks/useMenuTypeahead';
-import { useSetting } from '../../hooks/useSetting';
+import { useSetting, useSettingState } from '../../hooks/useSetting';
 import { geminiPresetModels } from '../../../shared/geminiModelSelections';
+
+const GEMINI_PROVIDER_ID = 'antigravity-gemini-agent';
+
+/** One-line hints mirroring the Gemini app's model menu. */
+function geminiModelHint(modelId: string): string | null {
+  const key = modelId.replace(/^antigravity-gemini-agent:/, '');
+  if (/-flash-lite(?:-|$)/.test(key)) return 'Fastest answers';
+  if (/-flash(?:-|$)/.test(key)) return 'All-around help';
+  if (/-pro(?:-|$)/.test(key)) return 'Advanced reasoning';
+  if (/-argon(?:-|$)/.test(key)) return 'Complex tasks';
+  return null;
+}
+
+const GEMINI_THINKING_LEVELS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+] as const;
 
 const ALPHA_PROVIDERS = new Set(['opencode', 'copilot-cli', 'grok-build', 'cursor-agent', 'antigravity-gemini-agent']);
 
@@ -93,6 +111,7 @@ export function ModelSelector({
     medium: useSetting('ai.gemini.mediumModel'),
     high: useSetting('ai.gemini.highModel'),
   };
+  const [geminiThinkingLevel, setGeminiThinkingLevel] = useSettingState('ai.gemini.thinkingLevel');
   const setWindowMode = useSetAtom(setWindowModeAtom);
   const navigateToSettings = useSetAtom(navigateToSettingsAtom);
   const menuRef = React.useRef<HTMLDivElement>(null);
@@ -462,7 +481,14 @@ export function ModelSelector({
                             data-model-id={model.id}
                             data-model-name={model.name}
                           >
-                            <span className={`model-selector-option-name flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${isDisabled ? 'text-[var(--nim-text-faint)]' : ''}`}>{model.name}</span>
+                            <span className={`model-selector-option-name flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${isDisabled ? 'text-[var(--nim-text-faint)]' : ''}`}>
+                              {model.name}
+                              {provider === GEMINI_PROVIDER_ID && geminiModelHint(model.id) && (
+                                <span aria-hidden="true" className="model-selector-option-hint block text-[10px] text-[var(--nim-text-faint)]">
+                                  {geminiModelHint(model.id)}
+                                </span>
+                              )}
+                            </span>
                             {isDisabled ? (
                               <MaterialSymbol icon="block" size={14} className="disabled-icon text-[var(--nim-text-faint)]" />
                             ) : isCurrent ? (
@@ -471,6 +497,29 @@ export function ModelSelector({
                           </button>
                         );
                       })}
+                      {provider === GEMINI_PROVIDER_ID && providerModels.length > 0 && (
+                        <div
+                          className="gemini-thinking-level flex items-center gap-1 pl-6 pr-2 py-1 text-[11px] text-[var(--nim-text-muted)]"
+                          data-testid="gemini-thinking-level"
+                          role="radiogroup"
+                          aria-label="Gemini thinking level"
+                        >
+                          <span className="flex-1" aria-hidden="true">Thinking level</span>
+                          {GEMINI_THINKING_LEVELS.map(({ value, label }) => (
+                            <button
+                              key={value}
+                              type="button"
+                              role="radio"
+                              tabIndex={-1}
+                              aria-checked={geminiThinkingLevel === value}
+                              className={`px-[6px] py-[2px] rounded border-none text-[10px] cursor-pointer ${geminiThinkingLevel === value ? 'bg-[var(--nim-bg-secondary)] text-[var(--nim-primary)] font-semibold' : 'bg-transparent text-[var(--nim-text-muted)] hover:bg-[var(--nim-bg-hover)]'}`}
+                              onClick={(event) => { event.stopPropagation(); void setGeminiThinkingLevel(value); }}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </>

@@ -209,6 +209,12 @@ export const SETTINGS_REGISTRY = {
     { store: 'ai-settings', path: 'geminiModelSelections.high' },
     '',
   ),
+  /** Thinking level for Gemini (Antigravity) model families, like the Gemini app's "Thinking level". */
+  'ai.gemini.thinkingLevel': setting(
+    z.enum(['low', 'medium', 'high']),
+    { store: 'ai-settings', path: 'geminiThinkingLevel' },
+    'medium',
+  ),
   'ai.showToolCalls': setting(
     z.boolean(),
     { store: 'ai-settings', path: 'showToolCalls' },

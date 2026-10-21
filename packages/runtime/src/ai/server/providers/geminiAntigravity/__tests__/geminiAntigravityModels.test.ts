@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest';
 import {
   bareGeminiModelKey,
   discoverGeminiModels,
+  geminiFamilyKey,
+  geminiVariantCandidates,
   isOfferedFlashModel,
+  selectGeminiFamilies,
   selectGeminiModels,
 } from '../geminiAntigravityModels';
 import type { AntigravityModelInfo } from '../AntigravityServerManager';
@@ -108,6 +111,41 @@ describe('selectGeminiModels', () => {
     expect(selectGeminiModels(catalog, new Set()).map((m) => m.key)).toEqual([
       'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-4-argon-medium',
     ]);
+  });
+
+  it('groups variants into one entry per family like the Gemini app (Antigravity 2.24.0 catalog)', () => {
+    const catalog = catalogOf(
+      ['gemini-2.5-flash-lite', 'Gemini 3.5 Flash Lite'], // mislabelled legacy slot
+      ['gemini-3.1-flash-lite', 'Gemini 3.1 Flash Lite'],
+      ['gemini-3.5-flash-lite', 'Gemini 3.5 Flash Lite'],
+      ['gemini-3.7-flash-medium', 'Gemini 3.7 Flash (Medium)'],
+      ['gemini-3.8-flash-high', 'Gemini 3.8 Flash (High)'],
+      ['gemini-3.8-flash-low', 'Gemini 3.8 Flash (Low)'],
+      ['gemini-3.8-flash-medium', 'Gemini 3.8 Flash (Medium)'],
+      ['gemini-3.8-flash-tiered', ''],
+      ['gemini-4-argon-high', 'Gemini 4 Argon (High)'],
+      ['gemini-4-argon-medium', 'Gemini 4 Argon (Medium)'],
+      ['gemini-3.1-flash-image', 'Gemini 3.1 Flash Image'],
+    );
+    // Entitlement lists only the agent variants (as clientModelConfigs does);
+    // the newest Flash-Lite is offered anyway because GetModelResponse serves it.
+    const entitled = new Set([...catalog.values()]
+      .filter((m) => /flash-(high|low|medium)$|argon/.test(m.key))
+      .map((m) => m.enum));
+    expect(selectGeminiFamilies(catalog, entitled)).toEqual([
+      { key: 'gemini-3.5-flash-lite', displayName: 'Gemini 3.5 Flash-Lite' },
+      { key: 'gemini-3.8-flash', displayName: 'Gemini 3.8 Flash' },
+      { key: 'gemini-4-argon', displayName: 'Gemini 4 Argon' },
+    ]);
+  });
+
+  it('resolves a family to the thinking-level variant, and keeps explicit variants', () => {
+    expect(geminiVariantCandidates('gemini-3.8-flash', 'high')[0]).toBe('gemini-3.8-flash-high');
+    expect(geminiVariantCandidates('gemini-3.5-flash-lite', 'low').slice(0, 2))
+      .toEqual(['gemini-3.5-flash-lite-low', 'gemini-3.5-flash-lite']);
+    expect(geminiVariantCandidates('gemini-3.8-flash-medium', 'high')).toEqual(['gemini-3.8-flash-medium']);
+    expect(geminiVariantCandidates('gemini-3.8-flash-tiered', 'low')).toEqual(['gemini-3.8-flash-tiered']);
+    expect(geminiFamilyKey('gemini-4-argon-low')).toBe('gemini-4-argon');
   });
 
   it('still honours entitlement for a current generation', () => {

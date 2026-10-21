@@ -144,6 +144,91 @@ export function selectGeminiModels(
   return out.sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
+// ---- Families and thinking level -------------------------------------------
+//
+// Antigravity exposes each agent model as several catalog entries that differ
+// only in thinking budget ("Gemini 3.8 Flash (High|Medium|Low)"). Listing every
+// entry made the picker a wall of near-duplicates and hid the actual choice the
+// Gemini app offers: WHICH model (Flash-Lite / Flash / Pro / Argon), with the
+// thinking level as a separate knob. So the picker lists families, and the
+// variant is chosen at send time from the user's thinking level.
+
+export type GeminiThinkingLevel = 'low' | 'medium' | 'high';
+
+const VARIANT_SUFFIX = /-(?:high|medium|low|tiered|extra-low)$/;
+const FAMILY_KEY = /^gemini-(\d+(?:\.\d+)?)-(flash-lite|flash|pro|argon)$/;
+const FAMILY_ORDER = ['flash-lite', 'flash', 'pro', 'argon'];
+
+/** "gemini-3.8-flash-medium" -> "gemini-3.8-flash". Keys without a variant suffix are returned unchanged. */
+export function geminiFamilyKey(key: string): string {
+  return key.replace(VARIANT_SUFFIX, '');
+}
+
+/** True when the key already names one specific variant (explicit thinking level). */
+export function isGeminiVariantKey(key: string): boolean {
+  return VARIANT_SUFFIX.test(key);
+}
+
+function versionOf(v: string): [number, number] {
+  const [a, b] = v.split('.');
+  return [Number(a), Number(b ?? 0)];
+}
+
+function newer(a: string, b: string): boolean {
+  const [am, an] = versionOf(a);
+  const [bm, bn] = versionOf(b);
+  return am !== bm ? am > bm : an > bn;
+}
+
+/**
+ * The model families to offer, one per kind, newest generation of each,
+ * ordered fastest to most capable (Flash-Lite, Flash, Pro, Argon).
+ *
+ * Agent families (Flash, Pro, Argon) follow `selectGeminiModels`: entitled and
+ * not retired. Flash-Lite is the exception: the account entitlement list
+ * (`clientModelConfigs`) only names the agent models the Antigravity editor
+ * shows, yet GetModelResponse serves the newest Flash-Lite to the same account
+ * (verified on Antigravity 2.24.0: gemini-3.5-flash-lite answers). Older
+ * Flash-Lite generations are not offered.
+ */
+export function selectGeminiFamilies(
+  catalog: Map<string, AntigravityModelInfo>,
+  entitledEnums: ReadonlySet<string>,
+): Array<{ key: string; displayName: string }> {
+  const best = new Map<string, { key: string; version: string }>();
+  const consider = (familyKey: string): void => {
+    const m = FAMILY_KEY.exec(familyKey);
+    if (!m) return;
+    const [, version, kind] = m;
+    const cur = best.get(kind);
+    if (!cur || newer(version, cur.version)) best.set(kind, { key: familyKey, version });
+  };
+  for (const variant of selectGeminiModels(catalog, entitledEnums)) consider(geminiFamilyKey(variant.key));
+  for (const info of catalog.values()) {
+    if (info.apiProvider !== GOOGLE_API_PROVIDER || !info.enum) continue;
+    const m = FAMILY_KEY.exec(info.key);
+    if (m && m[2] === 'flash-lite') consider(info.key);
+  }
+  return FAMILY_ORDER.flatMap((kind) => {
+    const entry = best.get(kind);
+    if (!entry) return [];
+    const label = (labelFromModelKey(entry.key) ?? entry.key).replace('Flash Lite', 'Flash-Lite');
+    return [{ key: entry.key, displayName: label }];
+  });
+}
+
+/**
+ * Catalog keys to try, in order, for a stored model key and thinking level.
+ * An explicit variant is used as-is; a family resolves to its level variant,
+ * then the family key itself (models with no variants, e.g. Flash-Lite), then
+ * the remaining levels.
+ */
+export function geminiVariantCandidates(key: string, level: GeminiThinkingLevel): string[] {
+  if (isGeminiVariantKey(key)) return [key];
+  const order: string[] = [`${key}-${level}`, key, `${key}-medium`, `${key}-high`, `${key}-low`, `${key}-tiered`];
+  return [...new Set(order)];
+}
+
 /** Read the account's entitled model enums out of a raw GetUserStatus payload. */
 export function entitledModelEnums(userStatus: unknown): Set<string> {
   const enums = new Set<string>();
@@ -171,5 +256,5 @@ export async function discoverGeminiModels(
     server.getAvailableModels(endpoint),
     server.getUserStatus(endpoint),
   ]);
-  return selectGeminiModels(catalog, entitledModelEnums(userStatus));
+  return selectGeminiFamilies(catalog, entitledModelEnums(userStatus));
 }

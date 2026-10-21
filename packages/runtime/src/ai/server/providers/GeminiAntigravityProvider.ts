@@ -55,6 +55,8 @@ import {
   bareGeminiModelKey,
   discoverGeminiModels,
   geminiLabelForModelKey,
+  geminiVariantCandidates,
+  type GeminiThinkingLevel,
 } from './geminiAntigravity/geminiAntigravityModels';
 import type { ProviderSessionData } from './ProviderSessionManager';
 import type {
@@ -108,6 +110,8 @@ export interface GeminiServerConfig {
    * spawning the server just to fill a menu.
    */
   savedModelIds?: string[];
+  /** Thinking level applied when the selected model is a family (default medium). */
+  thinkingLevel?: GeminiThinkingLevel;
   overrideIdeVersion?: string;
   spawnPortCandidates?: number[];
 }
@@ -248,6 +252,19 @@ export class GeminiAntigravityProvider extends BaseAgentProvider {
       yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       return;
     }
+    // A family selection ("gemini-3.8-flash") becomes the catalog variant for
+    // the user's thinking level; an explicit variant is used unchanged.
+    let variantKey: string;
+    try {
+      variantKey = await this.resolveVariantKey(state.modelKey);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      yield /not found at |Install Antigravity/i.test(errorMessage)
+        ? { type: 'error', error: GeminiAntigravityProvider.NOT_INSTALLED_MESSAGE }
+        : { type: 'error', error: errorMessage };
+      return;
+    }
+    state.toolLoop.setModelKey(variantKey);
     const abortController = new AbortController();
     state.abortController = abortController;
     this.abortController = abortController;
@@ -303,7 +320,7 @@ export class GeminiAntigravityProvider extends BaseAgentProvider {
           const analysis = await runCascadeVision(this.server, {
             userMessage: message,
             inputs: vision.inputs,
-            modelKey: state.modelKey,
+            modelKey: variantKey,
             abortSignal: abortController.signal,
           });
           state.visualNotes.push({ names, analysis });
@@ -434,6 +451,20 @@ export class GeminiAntigravityProvider extends BaseAgentProvider {
       if (this.abortController === abortController) this.abortController = null;
       this.pendingEditSnapshots.length = 0;
     }
+  }
+
+  // --- Model variant -------------------------------------------------------
+
+  private async resolveVariantKey(key: string): Promise<string> {
+    const level = GeminiAntigravityProvider.serverConfigLoader?.().thinkingLevel ?? 'medium';
+    const candidates = geminiVariantCandidates(key, level);
+    if (candidates.length === 1) return candidates[0];
+    const catalog = await this.server.getAvailableModels();
+    const hit = candidates.find((c) => catalog.has(c));
+    if (!hit) {
+      throw new Error(`Gemini model "${key}" is not offered by Antigravity anymore. Pick another Gemini model.`);
+    }
+    return hit;
   }
 
   // --- Attachments ---------------------------------------------------------

@@ -2199,6 +2199,7 @@ app.whenReady().then(async () => {
         spawnPortCandidates?: unknown;
       }>)['antigravity-gemini-agent'] ?? {};
       return {
+        defaultModel: getSettingsService().get('ai.gemini.mediumModel'),
         overrideIdeVersion: typeof settings.overrideIdeVersion === 'string'
           ? settings.overrideIdeVersion
           : undefined,

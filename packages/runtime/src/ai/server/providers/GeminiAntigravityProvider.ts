@@ -46,6 +46,7 @@ import { AntigravityToolLoopProtocol } from './geminiAntigravity/AntigravityTool
 import {
   bareGeminiModelKey,
   discoverGeminiModels,
+  geminiLabelForModelKey,
 } from './geminiAntigravity/geminiAntigravityModels';
 import type { ProviderSessionData } from './ProviderSessionManager';
 import type {
@@ -92,6 +93,13 @@ export type GeminiToolExecutor = (args: GeminiToolExecutorArgs) => Promise<Gemin
 /** Server tuning the Electron main process reads out of settings. */
 export interface GeminiServerConfig {
   defaultModel?: string;
+  /**
+   * The user's persisted Low/Medium/High model ids. Offered as the catalog
+   * while no language server is running (e.g. right after an app restart), so
+   * the picker shows the user's real choices instead of nothing -- without
+   * spawning the server just to fill a menu.
+   */
+  savedModelIds?: string[];
   overrideIdeVersion?: string;
   spawnPortCandidates?: number[];
 }
@@ -545,7 +553,17 @@ export class GeminiAntigravityProvider extends BaseAgentProvider {
    * `geminiAntigravityModels.ts` for why discovery never spawns the server.
    */
   static async getModels(): Promise<AIModel[]> {
-    const models = await discoverGeminiModels(AntigravityServerManager.shared());
+    const server = AntigravityServerManager.shared();
+    if (!server.currentEndpoint()) {
+      const prefix = `${GEMINI_ANTIGRAVITY_PROVIDER}:`;
+      const saved = [...new Set(this.serverConfigLoader?.().savedModelIds ?? [])]
+        .filter((id) => typeof id === 'string' && id.startsWith(prefix) && id.length > prefix.length);
+      return saved.map((id) => {
+        const key = id.slice(prefix.length);
+        return { id, name: geminiLabelForModelKey(key) ?? key, provider: GEMINI_ANTIGRAVITY_PROVIDER };
+      });
+    }
+    const models = await discoverGeminiModels(server);
     return models.map((m) => ({
       id: `${GEMINI_ANTIGRAVITY_PROVIDER}:${m.key}`,
       name: m.displayName,

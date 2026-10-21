@@ -54,6 +54,11 @@ const FLASH_LABEL = /^Gemini (\d+)(?:\.(\d+))? Flash(?: \((?:High|Medium|Low|Tie
 // Argon is the Gemini 4 agent family (Antigravity 2.24.0 labels it "Gemini 4 Argon (High)").
 const OTHER_TEXT_LABEL = /^Gemini \d+(?:\.\d+)? (?:Flash Lite|Pro|Argon)(?: \((?:High|Medium|Low|Tiered)\))?$/;
 
+/** Human label derived from a catalog key ("gemini-3.8-flash-medium" -> "Gemini 3.8 Flash (Medium)"), or null. */
+export function geminiLabelForModelKey(key: string): string | null {
+  return labelFromModelKey(key);
+}
+
 function labelFromModelKey(key: string): string | null {
   const match = /^gemini-(\d+(?:\.\d+)?)-(flash-lite|flash|pro|argon)(?:-(high|medium|low|tiered))?$/.exec(key);
   if (!match) return null;

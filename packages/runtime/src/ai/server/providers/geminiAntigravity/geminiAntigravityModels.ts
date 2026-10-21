@@ -51,12 +51,15 @@ const MIN_FLASH_GENERATION: readonly [major: number, minor: number] = [3, 7];
  * happen to share the prefix -- an unanchored match would drag them in.
  */
 const FLASH_LABEL = /^Gemini (\d+)(?:\.(\d+))? Flash(?: \((?:High|Medium|Low|Tiered)\))?$/;
-const OTHER_TEXT_LABEL = /^Gemini \d+(?:\.\d+)? (?:Flash Lite|Pro)(?: \((?:High|Medium|Low|Tiered)\))?$/;
+// Argon is the Gemini 4 agent family (Antigravity 2.24.0 labels it "Gemini 4 Argon (High)").
+const OTHER_TEXT_LABEL = /^Gemini \d+(?:\.\d+)? (?:Flash Lite|Pro|Argon)(?: \((?:High|Medium|Low|Tiered)\))?$/;
 
 function labelFromModelKey(key: string): string | null {
-  const match = /^gemini-(\d+(?:\.\d+)?)-(flash-lite|flash|pro)(?:-(high|medium|low|tiered))?$/.exec(key);
+  const match = /^gemini-(\d+(?:\.\d+)?)-(flash-lite|flash|pro|argon)(?:-(high|medium|low|tiered))?$/.exec(key);
   if (!match) return null;
-  const family = match[2] === 'flash-lite' ? 'Flash Lite' : match[2] === 'flash' ? 'Flash' : 'Pro';
+  const family = match[2] === 'flash-lite' ? 'Flash Lite'
+    : match[2] === 'flash' ? 'Flash'
+      : match[2] === 'argon' ? 'Argon' : 'Pro';
   const tier = match[3];
   return `Gemini ${match[1]} ${family}${tier ? ` (${tier[0].toUpperCase()}${tier.slice(1)})` : ''}`;
 }

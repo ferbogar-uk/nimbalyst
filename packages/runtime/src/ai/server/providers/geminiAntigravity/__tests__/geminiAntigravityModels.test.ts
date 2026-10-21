@@ -98,6 +98,18 @@ describe('selectGeminiModels', () => {
     ]);
   });
 
+  it('offers entitled Gemini 4 Argon tiers by their real labels (Antigravity 2.24.0)', () => {
+    const catalog = catalogOf(
+      ['gemini-4-argon-high', 'Gemini 4 Argon (High)'],
+      ['gemini-4-argon-low', 'Gemini 4 Argon (Low)'],
+      ['gemini-4-argon-medium', 'Gemini 4 Argon (Medium)'],
+      ['gemini-3.1-flash-image', 'Gemini 3.1 Flash Image'],
+    );
+    expect(selectGeminiModels(catalog, new Set()).map((m) => m.key)).toEqual([
+      'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-4-argon-medium',
+    ]);
+  });
+
   it('still honours entitlement for a current generation', () => {
     const catalog = catalogOf(['gemini-3.8-flash-medium', 'Gemini 3.8 Flash (Medium)']);
 

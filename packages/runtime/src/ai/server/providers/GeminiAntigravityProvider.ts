@@ -44,6 +44,14 @@ import {
 } from './geminiAntigravity/AntigravityServerManager';
 import { AntigravityToolLoopProtocol } from './geminiAntigravity/AntigravityToolLoopProtocol';
 import {
+  MAX_CASCADE_VISION_BYTES,
+  isCascadeVisionMime,
+  runCascadeVision,
+  type CascadeVisionInput,
+} from './geminiAntigravity/AntigravityCascadeVision';
+import { promises as fsp } from 'fs';
+import * as path from 'path';
+import {
   bareGeminiModelKey,
   discoverGeminiModels,
   geminiLabelForModelKey,
@@ -110,6 +118,43 @@ interface SessionState {
   modelKey: string;
   toolLoop: AntigravityToolLoopProtocol;
   abortController: AbortController | null;
+  /**
+   * Visual analyses of attachments from earlier turns. The host's history only
+   * carries the user's text, so without these a follow-up ("make the header
+   * match that screenshot") would have lost what the model saw.
+   */
+  visualNotes: Array<{ names: string[]; analysis: string }>;
+}
+
+const VISUAL_NOTES_MAX_CHARS = 12_000;
+
+const IMAGE_EXT_MIME: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.gif': 'image/gif', '.heic': 'image/heic', '.heif': 'image/heif', '.pdf': 'application/pdf',
+};
+
+/** `@path` mentions in a message that point at an image or PDF. */
+export function mentionedMediaPaths(message: string): string[] {
+  const out: string[] = [];
+  const re = /@(?:"([^"]+)"|([^\s"'`<>()[\]{}]+))/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(message)) !== null) {
+    const raw = (m[1] ?? m[2] ?? '').replace(/[.,;:!?]+$/, '');
+    if (IMAGE_EXT_MIME[path.extname(raw).toLowerCase()]) out.push(raw);
+  }
+  return out;
+}
+
+function renderVisualNotes(notes: SessionState['visualNotes']): string {
+  if (notes.length === 0) return '';
+  let body = '';
+  // Newest first so truncation drops the oldest.
+  for (let i = notes.length - 1; i >= 0; i--) {
+    const entry = `- ${notes[i].names.join(', ')}:\n${notes[i].analysis}\n`;
+    if (body.length + entry.length > VISUAL_NOTES_MAX_CHARS) break;
+    body = entry + body;
+  }
+  return `\n\nYou looked directly at these attachments earlier in this conversation. Your own visual analysis of each:\n${body}`;
 }
 
 // run_command tuning. The command runs in this process with the session's
@@ -183,7 +228,7 @@ export class GeminiAntigravityProvider extends BaseAgentProvider {
     sessionId?: string,
     messages?: Message[],
     workspacePath?: string,
-    _attachments?: ChatAttachment[],
+    attachments?: ChatAttachment[],
     tools?: AgentToolDefinition[],
     systemPrompt?: string,
   ): AsyncIterableIterator<StreamChunk> {
@@ -232,6 +277,59 @@ export class GeminiAntigravityProvider extends BaseAgentProvider {
     let finalText = '';
     let sawText = false;
     let toolCallSeq = 0;
+
+    // Notes from EARLIER turns go into the system prompt; this turn's analysis
+    // rides on the user message instead, so it is never stated twice.
+    const loopSystemPrompt = turnSystemPrompt + renderVisualNotes(state.visualNotes);
+    let loopMessage = message;
+
+    // Attachments: GetModelResponse is text-only, so images/PDFs are shown to
+    // the model through a tool-free Cascade step first (see
+    // AntigravityCascadeVision.ts). Surfaced as a tool card so the user can see
+    // what was looked at and what the model saw.
+    const vision = await this.collectVisionInputs(message, attachments, state.workspacePath);
+    if (vision.inputs.length > 0 || vision.skipped.length > 0) {
+      const id = `agy-${Date.now()}-${toolCallSeq++}`;
+      const names = vision.inputs.map((i) => i.name);
+      const args: Record<string, unknown> = { files: names };
+      if (vision.skipped.length > 0) args.skipped = vision.skipped;
+      yield { type: 'tool_call', toolCall: { id, name: 'view_attachments', arguments: args } };
+      let resultText: string;
+      if (vision.inputs.length === 0) {
+        resultText = `Not shown to the model: ${vision.skipped.join('; ')}`;
+        loopMessage = `${message}\n\n[Attachment note: ${resultText}. Do not guess what they contain.]`;
+      } else {
+        try {
+          const analysis = await runCascadeVision(this.server, {
+            userMessage: message,
+            inputs: vision.inputs,
+            modelKey: state.modelKey,
+            abortSignal: abortController.signal,
+          });
+          state.visualNotes.push({ names, analysis });
+          resultText = analysis;
+          loopMessage = `${message}\n\n[You have just looked directly at the attached ${names.join(', ')}. `
+            + `Your own visual analysis, to answer from (do not re-read these files with tools):]\n${analysis}`;
+        } catch (error) {
+          // A cancelled turn falls through: the tool loop sees the aborted
+          // signal and the finally below restores session state.
+          const why = abortController.signal.aborted
+            ? 'cancelled'
+            : (error instanceof Error ? error.message : String(error));
+          resultText = `Could not show ${names.join(', ')} to Gemini: ${why}`;
+          loopMessage = `${message}\n\n[The user attached ${names.join(', ')}, but it could not be shown to you `
+            + `(${why}). Tell them so instead of guessing what it contains.]`;
+        }
+        if (vision.skipped.length > 0) resultText += `\n\nNot shown: ${vision.skipped.join('; ')}`;
+      }
+      await this.logAgentMessageBestEffort(
+        sessionId,
+        'output',
+        JSON.stringify({ name: 'view_attachments', result: resultText, args }),
+        { metadata: { role: 'tool', timestamp: Date.now(), toolUseId: id } },
+      );
+      yield { type: 'tool_call', toolCall: { id, name: 'view_attachments', arguments: args, result: resultText } };
+    }
     // The tool loop reports a call and its result as two separate steps keyed
     // only by tool name, so the id minted on the call is held here until the
     // matching result arrives. It becomes the chunk's `toolUseId`, which is
@@ -240,8 +338,8 @@ export class GeminiAntigravityProvider extends BaseAgentProvider {
 
     try {
       for await (const step of state.toolLoop.run(
-        message,
-        turnSystemPrompt,
+        loopMessage,
+        loopSystemPrompt,
         (tools ?? []) as Array<{ type: 'function'; function: { name: string } }>,
         (name, args) => this.executeTool(state, name, args),
         undefined,
@@ -336,6 +434,64 @@ export class GeminiAntigravityProvider extends BaseAgentProvider {
       if (this.abortController === abortController) this.abortController = null;
       this.pendingEditSnapshots.length = 0;
     }
+  }
+
+  // --- Attachments ---------------------------------------------------------
+
+  /**
+   * Images and PDFs to show the model this turn: explicit attachments, plus
+   * `@path` mentions of image/PDF files inside the workspace (how a file in
+   * the project is usually "attached" in practice). Never throws -- anything
+   * unreadable, too large, or outside the workspace is reported in `skipped`.
+   */
+  private async collectVisionInputs(
+    message: string,
+    attachments: ChatAttachment[] | undefined,
+    workspacePath: string | undefined,
+  ): Promise<{ inputs: CascadeVisionInput[]; skipped: string[] }> {
+    const inputs: CascadeVisionInput[] = [];
+    const skipped: string[] = [];
+    const seen = new Set<string>();
+    let total = 0;
+
+    const add = async (absPath: string, name: string, mimeType: string): Promise<void> => {
+      const key = path.resolve(absPath).toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      try {
+        const stat = await fsp.stat(absPath);
+        if (!stat.isFile()) { skipped.push(`${name} (not a file)`); return; }
+        if (total + stat.size > MAX_CASCADE_VISION_BYTES) { skipped.push(`${name} (over the 20 MB per-message limit)`); return; }
+        const data = await fsp.readFile(absPath);
+        total += data.length;
+        inputs.push({ name, mimeType, data });
+      } catch (error) {
+        skipped.push(`${name} (${error instanceof Error ? error.message : String(error)})`);
+      }
+    };
+
+    for (const a of attachments ?? []) {
+      const mime = a.mimeType || IMAGE_EXT_MIME[path.extname(a.filename || a.filepath).toLowerCase()] || '';
+      if (!isCascadeVisionMime(mime)) continue;
+      await add(a.filepath, a.filename || path.basename(a.filepath), mime);
+    }
+
+    if (workspacePath) {
+      const root = path.resolve(workspacePath);
+      for (const mention of mentionedMediaPaths(message)) {
+        const abs = path.resolve(root, mention);
+        const rel = path.relative(root, abs);
+        if (rel.startsWith('..') || path.isAbsolute(rel)) { skipped.push(`${mention} (outside the project)`); continue; }
+        const mime = IMAGE_EXT_MIME[path.extname(abs).toLowerCase()];
+        try {
+          await fsp.access(abs);
+        } catch {
+          continue; // not a real file path -- just text that looked like one
+        }
+        await add(abs, rel.split(path.sep).join('/'), mime);
+      }
+    }
+    return { inputs, skipped };
   }
 
   // --- Tool execution ------------------------------------------------------
@@ -494,6 +650,7 @@ export class GeminiAntigravityProvider extends BaseAgentProvider {
       modelKey,
       toolLoop: new AntigravityToolLoopProtocol({ modelKey, server: this.server }),
       abortController: null,
+      visualNotes: [],
     };
     this.sessionStates.set(sessionId, state);
     return state;

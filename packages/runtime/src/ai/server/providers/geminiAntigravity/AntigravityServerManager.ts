@@ -399,6 +399,16 @@ export class AntigravityServerManager {
       `${[...catalog.keys()].join(', ')}`);
   }
 
+  /**
+   * Generic RPC against the current (or freshly ensured) endpoint. Used by the
+   * Cascade-based attachment analysis, whose methods have no dedicated wrapper.
+   */
+  async callRpc<T = unknown>(method: string, body: unknown, timeoutMs: number,
+    abortSignal?: AbortSignal): Promise<T> {
+    const endpoint = await this.ensureRunning();
+    return this.rpc<T>(method, body, endpoint, timeoutMs, abortSignal);
+  }
+
   /** Raw GetUserStatus (used by the usage meter). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getUserStatus(ep?: AntigravityEndpoint): Promise<any> {

@@ -179,6 +179,28 @@ export class AntigravityServerManager {
     return this.endpoint;
   }
 
+  private lastAttachMissAt = 0;
+
+  /**
+   * Attach to an Antigravity hub that is ALREADY running (the user has the
+   * Antigravity app open), never spawning one. Lets the model picker show the
+   * live catalog without the user first sending a turn or pressing Discover.
+   * A miss is remembered briefly so reopening the picker does not re-probe
+   * processes every time.
+   */
+  async attachIfRunning(): Promise<AntigravityEndpoint | null> {
+    if (this.endpoint) return this.endpoint;
+    if (this.startPromise) return this.startPromise.catch(() => null);
+    if (Date.now() - this.lastAttachMissAt < 30_000) return null;
+    const attached = await this.discoverRunningHub().catch(() => null);
+    if (attached) {
+      if (!this.endpoint) { this.endpoint = attached; this.enumCache.clear(); }
+      return this.endpoint;
+    }
+    this.lastAttachMissAt = Date.now();
+    return null;
+  }
+
   /** Stop the server if we own it. No-op when attached to the IDE's hub. */
   stop(): void {
     if (this.child && !this.child.killed) {

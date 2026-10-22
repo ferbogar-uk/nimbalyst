@@ -742,6 +742,7 @@ export class GeminiAntigravityProvider extends BaseAgentProvider {
    */
   static async getModels(): Promise<AIModel[]> {
     const server = AntigravityServerManager.shared();
+    if (!server.currentEndpoint()) await server.attachIfRunning();
     if (!server.currentEndpoint()) {
       const prefix = `${GEMINI_ANTIGRAVITY_PROVIDER}:`;
       const saved = [...new Set(this.serverConfigLoader?.().savedModelIds ?? [])]

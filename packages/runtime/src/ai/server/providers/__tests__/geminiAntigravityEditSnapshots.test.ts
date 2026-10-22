@@ -50,6 +50,8 @@ describe('Gemini explicit model defaults', () => {
 
   it('restores saved real model IDs before the native server starts after an app restart', async () => {
     vi.spyOn(AntigravityServerManager.prototype, 'currentEndpoint').mockReturnValue(null);
+    // No Antigravity app open: passive attach finds nothing and must not spawn.
+    vi.spyOn(AntigravityServerManager.prototype, 'attachIfRunning').mockResolvedValue(null);
     const ensureRunning = vi.spyOn(AntigravityServerManager.prototype, 'ensureRunning');
     GeminiAntigravityProvider.setServerConfigLoader(() => ({
       savedModelIds: [

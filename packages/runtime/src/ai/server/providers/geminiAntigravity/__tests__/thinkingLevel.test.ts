@@ -17,7 +17,10 @@ async function collect(stream: AsyncIterableIterator<StreamChunk>): Promise<Stre
 }
 
 function catalog(...keys: string[]): Map<string, AntigravityModelInfo> {
-  return new Map(keys.map((key, i) => [key, { key, enum: `MODEL_M${i}`, displayName: key }]));
+  // Empty displayName: labels are derived from the key, as for unlabelled slots.
+  return new Map(keys.map((key, i) => [key, {
+    key, enum: `MODEL_M${i}`, displayName: '', apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
+  }]));
 }
 
 describe('Gemini thinking level', () => {
@@ -66,6 +69,20 @@ describe('Gemini thinking level', () => {
     level = 'high';
     await collect(provider.sendMessage('two', undefined, 's-change'));
     expect(getModelResponse.mock.calls.map((c) => c[1])).toEqual(['gemini-3.8-flash-low', 'gemini-3.8-flash-high']);
+  });
+
+  it('lists families from an already-open Antigravity app without spawning a server', async () => {
+    const ep = { httpsPort: 1, csrf: 'x', owned: false };
+    let current: typeof ep | null = null;
+    vi.spyOn(AntigravityServerManager.prototype, 'currentEndpoint').mockImplementation(() => current);
+    const attach = vi.spyOn(AntigravityServerManager.prototype, 'attachIfRunning')
+      .mockImplementation(async () => { current = ep; return ep; });
+    const ensureRunning = vi.spyOn(AntigravityServerManager.prototype, 'ensureRunning');
+    vi.spyOn(AntigravityServerManager.prototype, 'getUserStatus').mockResolvedValue({});
+    const models = await GeminiAntigravityProvider.getModels();
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(ensureRunning).not.toHaveBeenCalled();
+    expect(models.map((m) => m.name)).toEqual(['Gemini 3.5 Flash-Lite', 'Gemini 3.8 Flash']);
   });
 
   it('reports a family the catalog no longer offers instead of substituting another model', async () => {
